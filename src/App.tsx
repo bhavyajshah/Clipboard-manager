@@ -20,58 +20,75 @@ declare global {
 }
 
 function App() {
-  const [items, setItems] = useState<ClipboardItem[]>(() => {
-    const saved = localStorage.getItem('clipboardItems')
-    return saved ? JSON.parse(saved) : []
-  })
+  const [items, setItems] = useState<ClipboardItem[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [darkMode, setDarkMode] = useState(false)
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [newCategory, setNewCategory] = useState('')
   const [showAddCategory, setShowAddCategory] = useState(false)
   const [newTag, setNewTag] = useState('')
+  const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
 
-  const categories = ['all', ...new Set(items.map(item => item.category).filter(Boolean))]
+  // Initialize categories with a default value to prevent undefined
+  const categories = ['all', ...new Set(items?.map(item => item.category).filter(Boolean) || [])]
 
   useEffect(() => {
-    localStorage.setItem('clipboardItems', JSON.stringify(items))
+    const savedItems = localStorage.getItem('clipboardItems')
+    if (savedItems) {
+      try {
+        setItems(JSON.parse(savedItems))
+      } catch (e) {
+        console.error('Error loading saved items:', e)
+        setItems([])
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (items.length > 0) {
+      localStorage.setItem('clipboardItems', JSON.stringify(items))
+    }
   }, [items])
 
   useEffect(() => {
-    const cleanup = window.clipboardAPI.onClipboardUpdate((content) => {
-      setItems(prevItems => {
-        const newItem: ClipboardItem = {
-          id: Date.now(),
-          content,
-          timestamp: new Date().toISOString(),
-          favorite: false,
-          category: 'uncategorized',
-          tags: []
-        }
-        return [newItem, ...prevItems].slice(0, 200) // Keep last 200 items
+    if (window.clipboardAPI?.onClipboardUpdate) {
+      const cleanup = window.clipboardAPI.onClipboardUpdate((content) => {
+        setItems(prevItems => {
+          const newItem: ClipboardItem = {
+            id: Date.now(),
+            content,
+            timestamp: new Date().toISOString(),
+            favorite: false,
+            category: 'uncategorized',
+            tags: []
+          }
+          return [newItem, ...prevItems].slice(0, 200)
+        })
       })
-    })
-    return cleanup
+      return cleanup
+    }
   }, [])
 
-  const filteredItems = items
-    .filter(item =>
-      (selectedCategory === 'all' || item.category === selectedCategory) &&
-      (item.content.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase())))
-    )
-    .sort((a, b) => {
-      if (a.favorite && !b.favorite) return -1
-      if (!a.favorite && b.favorite) return 1
-      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-    })
+  const filteredItems = items?.filter(item =>
+    (selectedCategory === 'all' || item.category === selectedCategory) &&
+    (item.content.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      item.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase())))
+  ) || []
+
+  const sortedItems = [...filteredItems].sort((a, b) => {
+    if (a.favorite && !b.favorite) return -1
+    if (!a.favorite && b.favorite) return 1
+    return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  })
 
   const handleCopy = async (content: string) => {
-    await window.clipboardAPI.setClipboard(content)
+    if (window.clipboardAPI?.setClipboard) {
+      await window.clipboardAPI.setClipboard(content)
+    }
   }
 
   const handleFavorite = (id: number) => {
-    setItems(prevItems => prevItems.map(item =>
+    setItems(prevItems => prevItems?.map(item =>
       item.id === id ? { ...item, favorite: !item.favorite } : item
     ))
   }
@@ -87,8 +104,8 @@ function App() {
   }
 
   const handleAddCategory = () => {
-    if (newCategory.trim()) {
-      setItems(prevItems => prevItems.map(item =>
+    if (newCategory.trim() && selectedItemId) {
+      setItems(prevItems => prevItems?.map(item =>
         item.id === selectedItemId ? { ...item, category: newCategory.trim() } : item
       ))
       setNewCategory('')
@@ -96,11 +113,9 @@ function App() {
     }
   }
 
-  const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
-
   const handleAddTag = (itemId: number) => {
     if (newTag.trim()) {
-      setItems(prevItems => prevItems.map(item =>
+      setItems(prevItems => prevItems?.map(item =>
         item.id === itemId
           ? { ...item, tags: [...new Set([...item.tags, newTag.trim()])] }
           : item
@@ -110,7 +125,7 @@ function App() {
   }
 
   const handleRemoveTag = (itemId: number, tagToRemove: string) => {
-    setItems(prevItems => prevItems.map(item =>
+    setItems(prevItems => prevItems?.map(item =>
       item.id === itemId
         ? { ...item, tags: item.tags.filter(tag => tag !== tagToRemove) }
         : item
@@ -146,16 +161,14 @@ function App() {
             placeholder="Search clips or tags..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className={`flex-1 p-2 rounded border ${darkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white border-gray-300'
-              }`}
+            className={`flex-1 p-2 rounded border ${darkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white border-gray-300'}`}
           />
           <select
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
-            className={`p-2 rounded border ${darkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white border-gray-300'
-              }`}
+            className={`p-2 rounded border ${darkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white border-gray-300'}`}
           >
-            {categories.map(category => (
+            {categories?.map(category => (
               <option key={category} value={category}>
                 {category.charAt(0).toUpperCase() + category.slice(1)}
               </option>
@@ -164,11 +177,10 @@ function App() {
         </div>
 
         <div className="space-y-2">
-          {filteredItems.map((item) => (
+          {sortedItems?.map((item) => (
             <div
               key={item.id}
-              className={`p-4 rounded-lg ${darkMode ? 'bg-gray-800 text-white' : 'bg-white shadow'
-                } ${item.favorite ? 'border-2 border-yellow-500' : ''}`}
+              className={`p-4 rounded-lg ${darkMode ? 'bg-gray-800 text-white' : 'bg-white shadow'} ${item.favorite ? 'border-2 border-yellow-500' : ''}`}
             >
               <div className="flex justify-between items-start">
                 <div className="flex-1">
@@ -176,18 +188,16 @@ function App() {
                     <p className={`${darkMode ? 'text-gray-300' : 'text-gray-600'} text-sm`}>
                       {new Date(item.timestamp).toLocaleString()}
                     </p>
-                    <span className={`px-2 py-1 rounded text-sm ${darkMode ? 'bg-gray-700' : 'bg-gray-200'
-                      }`}>
+                    <span className={`px-2 py-1 rounded text-sm ${darkMode ? 'bg-gray-700' : 'bg-gray-200'}`}>
                       {item.category}
                     </span>
                   </div>
                   <p className="break-words mb-2">{item.content}</p>
                   <div className="flex flex-wrap gap-2">
-                    {item.tags.map(tag => (
+                    {item?.tags?.map(tag => (
                       <span
                         key={tag}
-                        className={`px-2 py-1 rounded-full text-sm flex items-center gap-1 ${darkMode ? 'bg-gray-700' : 'bg-gray-200'
-                          }`}
+                        className={`px-2 py-1 rounded-full text-sm flex items-center gap-1 ${darkMode ? 'bg-gray-700' : 'bg-gray-200'}`}
                       >
                         #{tag}
                         <button
@@ -205,8 +215,7 @@ function App() {
                         value={newTag}
                         onChange={(e) => setNewTag(e.target.value)}
                         onKeyPress={(e) => e.key === 'Enter' && handleAddTag(item.id)}
-                        className={`px-2 py-1 rounded text-sm ${darkMode ? 'bg-gray-700' : 'bg-gray-200'
-                          }`}
+                        className={`px-2 py-1 rounded text-sm ${darkMode ? 'bg-gray-700' : 'bg-gray-200'}`}
                       />
                       <button
                         onClick={() => handleAddTag(item.id)}
@@ -223,26 +232,19 @@ function App() {
                       setSelectedItemId(item.id)
                       setShowAddCategory(true)
                     }}
-                    className={`p-2 rounded ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
-                      }`}
+                    className={`p-2 rounded ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'}`}
                   >
                     📁
                   </button>
                   <button
                     onClick={() => handleFavorite(item.id)}
-                    className={`p-2 rounded ${item.favorite
-                        ? 'bg-yellow-500 text-white'
-                        : darkMode
-                          ? 'bg-gray-700 text-gray-300'
-                          : 'bg-gray-200 text-gray-700'
-                      }`}
+                    className={`p-2 rounded ${item.favorite ? 'bg-yellow-500 text-white' : darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'}`}
                   >
                     ⭐
                   </button>
                   <button
                     onClick={() => handleCopy(item.content)}
-                    className={`p-2 rounded ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
-                      }`}
+                    className={`p-2 rounded ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'}`}
                   >
                     📋
                   </button>
@@ -268,8 +270,7 @@ function App() {
                 type="text"
                 value={newCategory}
                 onChange={(e) => setNewCategory(e.target.value)}
-                className={`p-2 rounded border mb-4 ${darkMode ? 'bg-gray-700 text-white border-gray-600' : 'bg-white border-gray-300'
-                  }`}
+                className={`p-2 rounded border mb-4 ${darkMode ? 'bg-gray-700 text-white border-gray-600' : 'bg-white border-gray-300'}`}
                 placeholder="Enter category name"
               />
               <div className="flex justify-end gap-2">
