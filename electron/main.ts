@@ -1,29 +1,20 @@
-import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Tray, Menu } from 'electron'
-import { createRequire } from 'node:module'
+import { app, BrowserWindow, clipboard, globalShortcut, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
-import path from 'node:path'
+import { dirname, join } from 'node:path'
 
-const require = createRequire(import.meta.url)
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-
-process.env.APP_ROOT = path.join(__dirname, '..')
-
-export const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
-export const MAIN_DIST = path.join(process.env.APP_ROOT, 'dist-electron')
-export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
-
-process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
+// Fix for __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 let win: BrowserWindow | null = null
-let tray: Tray | null = null
+const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 800,
-    height: 600,
-    // icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
+    width: 1024,
+    height: 768,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.mjs'),
+      preload: join(__dirname, 'preload.js'),
       nodeIntegration: true,
       contextIsolation: true,
     },
@@ -33,20 +24,10 @@ function createWindow() {
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL)
   } else {
-    win.loadFile(path.join(RENDERER_DIST, 'index.html'))
+    win.loadFile(join(__dirname, '../dist/index.html'))
   }
 
   return win
-}
-
-function setupTray() {
-  tray = new Tray(path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'))
-  const contextMenu = Menu.buildFromTemplate([
-    { label: 'Show', click: () => win?.show() },
-    { label: 'Quit', click: () => app.quit() }
-  ])
-  tray.setToolTip('Clipboard Manager')
-  tray.setContextMenu(contextMenu)
 }
 
 let previousClipboardContent = ''
@@ -63,14 +44,15 @@ function monitorClipboard() {
 
 app.whenReady().then(() => {
   createWindow()
-  setupTray()
+  win?.show()
   monitorClipboard()
 
-  globalShortcut.register('Alt+CommandOrControl+F', () => {
+  globalShortcut.register('Alt+Space', () => {
     if (win?.isVisible()) {
       win.hide()
     } else {
       win?.show()
+      win?.focus()
     }
   })
 
