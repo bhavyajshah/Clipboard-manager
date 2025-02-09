@@ -6,92 +6,139 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 let win: BrowserWindow | null = null
+let previousClipboardContent = ''
+let clipboardMonitorInterval: NodeJS.Timer | null = null
 
 function createWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize
 
   win = new BrowserWindow({
-    width: 300,
-    height: 400,
-    x: screenWidth - 320, // Position near the right edge
-    y: screenHeight - 420, // Position near the bottom
-    frame: false, // Remove window frame
-    transparent: true, // Make window transparent
+    width: 400,
+    height: 600,
+    x: screenWidth - 420,
+    y: screenHeight - 620,
+    frame: false,
+    transparent: true,
     resizable: false,
     alwaysOnTop: true,
-    skipTaskbar: true, // Don't show in taskbar
+    skipTaskbar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false // Important: Allow preload script to work
     },
     show: false,
   })
 
   if (process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL)
-    // win.webContents.openDevTools()
   } else {
     win.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
-  // Hide window when it loses focus
   win.on('blur', () => {
     win?.hide()
+  })
+
+  // Debug: Log when window is ready
+  win.webContents.on('did-finish-load', () => {
+    console.log('Window loaded and ready')
   })
 
   return win
 }
 
-let previousClipboardContent = ''
+function stopClipboardMonitor() {
+  if (clipboardMonitorInterval) {
+    clearInterval(clipboardMonitorInterval as NodeJS.Timeout)
+    clipboardMonitorInterval = null
+  }
+}
 
-function monitorClipboard() {
-  setInterval(() => {
-    if (!win) return
-    const currentContent = clipboard.readText()
-    if (currentContent && currentContent !== previousClipboardContent) {
-      previousClipboardContent = currentContent
-      win.webContents.send('clipboard-updated', currentContent)
+function startClipboardMonitor() {
+  stopClipboardMonitor()
+
+  clipboardMonitorInterval = setInterval(() => {
+    try {
+      if (!win) return
+
+      const currentContent = clipboard.readText()
+
+      if (currentContent && currentContent !== previousClipboardContent) {
+        console.log('New clipboard content detected')
+        previousClipboardContent = currentContent
+
+        // Ensure window is ready before sending
+        if (win.webContents.isLoading()) {
+          console.log('Window still loading, waiting...')
+          return
+        }
+
+        win.webContents.send('clipboard-updated', currentContent)
+        console.log('Sent clipboard update to renderer')
+      }
+    } catch (error) {
+      console.error('Error monitoring clipboard:', error)
     }
-  }, 500)
+  }, 500) // Increased interval slightly for stability
 }
 
 app.whenReady().then(() => {
-  createWindow()
-  monitorClipboard()
+  win = createWindow()
 
-  // Register Windows + Alt + H shortcut
+  // Wait for window to be ready before starting monitor
+  win.webContents.on('did-finish-load', () => {
+    console.log('Starting clipboard monitor')
+    startClipboardMonitor()
+
+    // Force initial clipboard check
+    const initialContent = clipboard.readText()
+    if (initialContent) {
+      win?.webContents.send('clipboard-updated', initialContent)
+    }
+  })
+
   globalShortcut.register('CommandOrControl+Alt+H', () => {
     if (win?.isVisible()) {
       win.hide()
     } else {
       win?.show()
       win?.focus()
+
+      // Force clipboard check when window is shown
+      const currentContent = clipboard.readText()
+      if (currentContent && currentContent !== previousClipboardContent) {
+        previousClipboardContent = currentContent
+        win?.webContents.send('clipboard-updated', currentContent)
+      }
     }
   })
 
-  // Handle paste request
   ipcMain.handle('paste-content', async (_event, content) => {
-    const activeWin = BrowserWindow.getFocusedWindow()
-
-    // Set clipboard content
-    clipboard.writeText(content)
-
-    // Hide the window
-    win?.hide()
-
-    // Simulate Ctrl+V to paste
-    if (activeWin) {
-      activeWin.webContents.paste()
+    try {
+      const activeWin = BrowserWindow.getFocusedWindow()
+      clipboard.writeText(content)
+      win?.hide()
+      if (activeWin) {
+        activeWin.webContents.paste()
+      }
+    } catch (error) {
+      console.error('Error pasting content:', error)
     }
   })
 
   ipcMain.handle('set-clipboard', (_event, content) => {
-    clipboard.writeText(content)
+    try {
+      clipboard.writeText(content)
+    } catch (error) {
+      console.error('Error setting clipboard:', error)
+    }
   })
 })
 
 app.on('window-all-closed', () => {
+  stopClipboardMonitor()
   if (process.platform !== 'darwin') {
     app.quit()
     win = null
@@ -100,10 +147,14 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow()
+    win = createWindow()
+    win.webContents.on('did-finish-load', () => {
+      startClipboardMonitor()
+    })
   }
 })
 
 app.on('will-quit', () => {
+  stopClipboardMonitor()
   globalShortcut.unregisterAll()
 })
