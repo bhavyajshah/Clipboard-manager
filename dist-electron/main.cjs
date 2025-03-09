@@ -3,7 +3,7 @@ const electron = require("electron");
 const path = require("path");
 const url = require("url");
 var _documentCurrentScript = typeof document !== "undefined" ? document.currentScript : null;
-const __filename$1 = url.fileURLToPath(typeof document === "undefined" ? require("url").pathToFileURL(__filename).href : _documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === "SCRIPT" && _documentCurrentScript.src || new URL("main.js", document.baseURI).href);
+const __filename$1 = url.fileURLToPath(typeof document === "undefined" ? require("url").pathToFileURL(__filename).href : _documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === "SCRIPT" && _documentCurrentScript.src || new URL("main.cjs", document.baseURI).href);
 const __dirname$1 = path.dirname(__filename$1);
 let win = null;
 let previousClipboardContent = "";

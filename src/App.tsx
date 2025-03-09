@@ -2,11 +2,14 @@ import { useEffect, useState, useCallback } from 'react'
 import './index.css'
 import { Copy, Star, Trash2, FolderPlus, X, Search, Moon, Sun, Plus } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { supabase } from './lib/supabase'
+import { v4 as uuidv4 } from 'uuid'
 
 interface ClipboardItem {
-  id: number
+  id: string
+  device_id: string
   content: string
-  timestamp: string
+  created_at: string
   favorite: boolean
   category: string
   tags: string[]
@@ -22,6 +25,16 @@ declare global {
   }
 }
 
+// Generate a unique device ID if not exists
+const getDeviceId = () => {
+  const storedDeviceId = localStorage.getItem('deviceId')
+  if (storedDeviceId) return storedDeviceId
+  
+  const newDeviceId = uuidv4()
+  localStorage.setItem('deviceId', newDeviceId)
+  return newDeviceId
+}
+
 function App() {
   const [items, setItems] = useState<ClipboardItem[]>([])
   const [searchTerm, setSearchTerm] = useState('')
@@ -30,35 +43,33 @@ function App() {
   const [newCategory, setNewCategory] = useState('')
   const [showAddCategory, setShowAddCategory] = useState(false)
   const [newTag, setNewTag] = useState('')
-  const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
+  const deviceId = getDeviceId()
 
-  const categories = ['all', ...new Set(items.map(item => item.category).filter(Boolean))]
-
-  // Load saved items and preferences
+  // Load items from Supabase
   useEffect(() => {
-    const savedItems = localStorage.getItem('clipboardItems')
-    if (savedItems) {
+    const loadItems = async () => {
       try {
-        const parsedItems = JSON.parse(savedItems)
-        setItems(parsedItems)
-        console.log('Loaded saved items:', parsedItems)
-      } catch (e) {
-        console.error('Error loading saved items:', e)
-        setItems([])
+        const { data, error } = await supabase
+          .from('clipboard_items')
+          .select('*')
+          .order('created_at', { ascending: false })
+        
+        if (error) throw error
+        setItems(data || [])
+      } catch (error) {
+        console.error('Error loading items:', error)
       }
     }
 
+    loadItems()
+  }, [])
+
+  // Load dark mode preference
+  useEffect(() => {
     const darkModePref = localStorage.getItem('darkMode')
     setDarkMode(darkModePref === 'true')
   }, [])
-
-  // Save items when they change
-  useEffect(() => {
-    if (items.length >= 0) {
-      localStorage.setItem('clipboardItems', JSON.stringify(items))
-      console.log('Saved items to localStorage:', items)
-    }
-  }, [items])
 
   // Save dark mode preference
   useEffect(() => {
@@ -66,35 +77,31 @@ function App() {
   }, [darkMode])
 
   // Handle clipboard updates
-  const handleClipboardUpdate = useCallback((content: string) => {
-    console.log('Received clipboard update:', content)
+  const handleClipboardUpdate = useCallback(async (content: string) => {
+    if (!content.trim()) return
 
-    if (!content.trim()) {
-      console.log('Empty content, skipping')
-      return
-    }
-
-    setItems(prevItems => {
-      // Check if content already exists
-      if (prevItems.some(item => item.content === content)) {
-        console.log('Content already exists, skipping')
-        return prevItems
-      }
-
-      const newItem: ClipboardItem = {
-        id: Date.now(),
+    try {
+      const newItem = {
+        device_id: deviceId,
         content,
-        timestamp: new Date().toISOString(),
         favorite: false,
         category: 'uncategorized',
         tags: []
       }
 
-      console.log('Adding new item:', newItem)
-      const newItems = [newItem, ...prevItems].slice(0, 200)
-      return newItems
-    })
-  }, [])
+      const { data, error } = await supabase
+        .from('clipboard_items')
+        .insert([newItem])
+        .select()
+        .single()
+
+      if (error) throw error
+
+      setItems(prev => [data, ...prev])
+    } catch (error) {
+      console.error('Error saving clipboard item:', error)
+    }
+  }, [deviceId])
 
   // Set up clipboard monitoring
   useEffect(() => {
@@ -103,16 +110,8 @@ function App() {
       return
     }
 
-    console.log('Setting up clipboard monitoring')
-    const cleanup = window.clipboardAPI.onClipboardUpdate((content: string) => {
-      console.log('Clipboard update received in component:', content)
-      handleClipboardUpdate(content)
-    })
-
-    return () => {
-      console.log('Cleaning up clipboard monitoring')
-      cleanup()
-    }
+    const cleanup = window.clipboardAPI.onClipboardUpdate(handleClipboardUpdate)
+    return cleanup
   }, [handleClipboardUpdate])
 
   const filteredItems = items.filter(item =>
@@ -124,7 +123,7 @@ function App() {
   const sortedItems = [...filteredItems].sort((a, b) => {
     if (a.favorite && !b.favorite) return -1
     if (!a.favorite && b.favorite) return 1
-    return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   })
 
   const handleCopy = async (content: string) => {
@@ -137,50 +136,127 @@ function App() {
     }
   }
 
-  const handleFavorite = (id: number) => {
-    setItems(prevItems => prevItems.map(item =>
-      item.id === id ? { ...item, favorite: !item.favorite } : item
-    ))
+  const handleFavorite = async (id: string) => {
+    try {
+      const item = items.find(i => i.id === id)
+      if (!item) return
+
+      const { error } = await supabase
+        .from('clipboard_items')
+        .update({ favorite: !item.favorite })
+        .eq('id', id)
+
+      if (error) throw error
+
+      setItems(prev => prev.map(item =>
+        item.id === id ? { ...item, favorite: !item.favorite } : item
+      ))
+    } catch (error) {
+      console.error('Error updating favorite status:', error)
+    }
   }
 
-  const handleDelete = (id: number) => {
-    setItems(prevItems => prevItems.filter(item => item.id !== id))
+  const handleDelete = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('clipboard_items')
+        .delete()
+        .eq('id', id)
+
+      if (error) throw error
+
+      setItems(prev => prev.filter(item => item.id !== id))
+    } catch (error) {
+      console.error('Error deleting item:', error)
+    }
   }
 
-  const handleClearHistory = () => {
+  const handleClearHistory = async () => {
     if (window.confirm('Are you sure you want to clear all non-favorite items?')) {
-      setItems(prevItems => prevItems.filter(item => item.favorite))
+      try {
+        const { error } = await supabase
+          .from('clipboard_items')
+          .delete()
+          .eq('favorite', false)
+
+        if (error) throw error
+
+        setItems(prev => prev.filter(item => item.favorite))
+      } catch (error) {
+        console.error('Error clearing history:', error)
+      }
     }
   }
 
-  const handleAddCategory = () => {
+  const handleAddCategory = async () => {
     if (newCategory.trim() && selectedItemId) {
-      setItems(prevItems => prevItems.map(item =>
-        item.id === selectedItemId ? { ...item, category: newCategory.trim() } : item
-      ))
-      setNewCategory('')
-      setShowAddCategory(false)
+      try {
+        const { error } = await supabase
+          .from('clipboard_items')
+          .update({ category: newCategory.trim() })
+          .eq('id', selectedItemId)
+
+        if (error) throw error
+
+        setItems(prev => prev.map(item =>
+          item.id === selectedItemId ? { ...item, category: newCategory.trim() } : item
+        ))
+        setNewCategory('')
+        setShowAddCategory(false)
+      } catch (error) {
+        console.error('Error updating category:', error)
+      }
     }
   }
 
-  const handleAddTag = (itemId: number) => {
+  const handleAddTag = async (itemId: string) => {
     if (newTag.trim()) {
-      setItems(prevItems => prevItems.map(item =>
-        item.id === itemId
-          ? { ...item, tags: [...new Set([...item.tags, newTag.trim()])] }
-          : item
-      ))
-      setNewTag('')
+      try {
+        const item = items.find(i => i.id === itemId)
+        if (!item) return
+
+        const updatedTags = [...new Set([...item.tags, newTag.trim()])]
+        
+        const { error } = await supabase
+          .from('clipboard_items')
+          .update({ tags: updatedTags })
+          .eq('id', itemId)
+
+        if (error) throw error
+
+        setItems(prev => prev.map(item =>
+          item.id === itemId ? { ...item, tags: updatedTags } : item
+        ))
+        setNewTag('')
+      } catch (error) {
+        console.error('Error adding tag:', error)
+      }
     }
   }
 
-  const handleRemoveTag = (itemId: number, tagToRemove: string) => {
-    setItems(prevItems => prevItems.map(item =>
-      item.id === itemId
-        ? { ...item, tags: item.tags.filter(tag => tag !== tagToRemove) }
-        : item
-    ))
+  const handleRemoveTag = async (itemId: string, tagToRemove: string) => {
+    try {
+      const item = items.find(i => i.id === itemId)
+      if (!item) return
+
+      const updatedTags = item.tags.filter(tag => tag !== tagToRemove)
+      
+      const { error } = await supabase
+        .from('clipboard_items')
+        .update({ tags: updatedTags })
+        .eq('id', itemId)
+
+      if (error) throw error
+
+      setItems(prev => prev.map(item =>
+        item.id === itemId ? { ...item, tags: updatedTags } : item
+      ))
+    } catch (error) {
+      console.error('Error removing tag:', error)
+    }
   }
+
+  const categories = ['all', ...new Set(items.map(item => item.category).filter(Boolean))]
 
   return (
     <div className={`min-h-screen ${darkMode ? 'dark bg-gray-900' : 'bg-gray-100'}`}>
@@ -213,15 +289,13 @@ function App() {
               placeholder="Search clips or tags..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className={`w-full pl-8 p-2 text-sm rounded border ${darkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white border-gray-300'
-                }`}
+              className={`w-full pl-8 p-2 text-sm rounded border ${darkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white border-gray-300'}`}
             />
           </div>
           <select
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
-            className={`p-2 text-sm rounded border ${darkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white border-gray-300'
-              }`}
+            className={`p-2 text-sm rounded border ${darkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white border-gray-300'}`}
           >
             {categories.map(category => (
               <option key={category} value={category}>
@@ -244,17 +318,15 @@ function App() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
-                  className={`p-3 rounded-lg ${darkMode ? 'bg-gray-800 text-white' : 'bg-white shadow'
-                    } ${item.favorite ? 'border-2 border-yellow-500' : ''}`}
+                  className={`p-3 rounded-lg ${darkMode ? 'bg-gray-800 text-white' : 'bg-white shadow'} ${item.favorite ? 'border-2 border-yellow-500' : ''}`}
                 >
                   <div className="flex justify-between items-start gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <p className={`${darkMode ? 'text-gray-300' : 'text-gray-600'} text-xs`}>
-                          {new Date(item.timestamp).toLocaleString()}
+                          {new Date(item.created_at).toLocaleString()}
                         </p>
-                        <span className={`px-2 py-0.5 rounded text-xs ${darkMode ? 'bg-gray-700' : 'bg-gray-200'
-                          }`}>
+                        <span className={`px-2 py-0.5 rounded text-xs ${darkMode ? 'bg-gray-700' : 'bg-gray-200'}`}>
                           {item.category}
                         </span>
                       </div>
@@ -263,8 +335,7 @@ function App() {
                         {item.tags.map(tag => (
                           <span
                             key={tag}
-                            className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 ${darkMode ? 'bg-gray-700' : 'bg-gray-200'
-                              }`}
+                            className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 ${darkMode ? 'bg-gray-700' : 'bg-gray-200'}`}
                           >
                             #{tag}
                             <button
@@ -282,8 +353,7 @@ function App() {
                             value={newTag}
                             onChange={(e) => setNewTag(e.target.value)}
                             onKeyPress={(e) => e.key === 'Enter' && handleAddTag(item.id)}
-                            className={`px-2 py-0.5 rounded text-xs w-20 ${darkMode ? 'bg-gray-700' : 'bg-gray-200'
-                              }`}
+                            className={`px-2 py-0.5 rounded text-xs w-20 ${darkMode ? 'bg-gray-700' : 'bg-gray-200'}`}
                           />
                           <button
                             onClick={() => handleAddTag(item.id)}
@@ -300,26 +370,19 @@ function App() {
                           setSelectedItemId(item.id)
                           setShowAddCategory(true)
                         }}
-                        className={`p-1.5 rounded ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
-                          } hover:bg-opacity-80 transition-colors`}
+                        className={`p-1.5 rounded ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'} hover:bg-opacity-80 transition-colors`}
                       >
                         <FolderPlus size={14} />
                       </button>
                       <button
                         onClick={() => handleFavorite(item.id)}
-                        className={`p-1.5 rounded ${item.favorite
-                            ? 'bg-yellow-500 text-white'
-                            : darkMode
-                              ? 'bg-gray-700 text-gray-300'
-                              : 'bg-gray-200 text-gray-700'
-                          } hover:bg-opacity-80 transition-colors`}
+                        className={`p-1.5 rounded ${item.favorite ? 'bg-yellow-500 text-white' : darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'} hover:bg-opacity-80 transition-colors`}
                       >
                         <Star size={14} />
                       </button>
                       <button
                         onClick={() => handleCopy(item.content)}
-                        className={`p-1.5 rounded ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
-                          } hover:bg-opacity-80 transition-colors`}
+                        className={`p-1.5 rounded ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'} hover:bg-opacity-80 transition-colors`}
                       >
                         <Copy size={14} />
                       </button>
@@ -352,8 +415,7 @@ function App() {
                 type="text"
                 value={newCategory}
                 onChange={(e) => setNewCategory(e.target.value)}
-                className={`w-full p-2 text-sm rounded border mb-4 ${darkMode ? 'bg-gray-700 text-white border-gray-600' : 'bg-white border-gray-300'
-                  }`}
+                className={`w-full p-2 text-sm rounded border mb-4 ${darkMode ? 'bg-gray-700 text-white border-gray-600' : 'bg-white border-gray-300'}`}
                 placeholder="Enter category name"
               />
               <div className="flex justify-end gap-2">

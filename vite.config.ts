@@ -1,22 +1,42 @@
 import { defineConfig } from 'vite'
-import path from 'node:path'
-import electron from 'vite-plugin-electron/simple'
+import electron from 'vite-plugin-electron'
+import renderer from 'vite-plugin-electron-renderer'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [
     react(),
-    electron({
-      main: {
+    electron([
+      {
         entry: 'electron/main.ts',
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              output: {
+                entryFileNames: '[name].cjs',
+              },
+            },
+          },
+        },
       },
-      preload: {
-        input: path.join(__dirname, 'electron/preload.ts'),
+      {
+        entry: 'electron/preload.ts',
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              output: {
+                entryFileNames: '[name].cjs',
+              },
+            },
+          },
+        },
+        onstart(options) {
+          options.reload()
+        },
       },
-      renderer: {},
-    }),
+    ]),
+    renderer(),
   ],
-  build: {
-    outDir: 'dist',
-  },
 })
