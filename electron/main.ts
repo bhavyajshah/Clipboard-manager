@@ -8,9 +8,12 @@ const __dirname = path.dirname(__filename)
 let win: BrowserWindow | null = null
 let previousClipboardContent = ''
 let clipboardMonitorInterval: NodeJS.Timer | null = null
+let isUpdatingClipboard = false
 
 function createWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize
+
+  console.log('[Main] Creating window...')
 
   win = new BrowserWindow({
     width: 400,
@@ -23,10 +26,10 @@ function createWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '../dist-electron/preload.js'),
       contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false // Important: Allow preload script to work
+      nodeIntegration: true,
+      sandbox: false
     },
     show: false,
   })
@@ -41,15 +44,49 @@ function createWindow() {
     win?.hide()
   })
 
-  // Debug: Log when window is ready
   win.webContents.on('did-finish-load', () => {
-    console.log('Window loaded and ready')
+    console.log('[Main] Window loaded and ready')
   })
+
+  // For development
+  if (process.env.VITE_DEV_SERVER_URL) {
+    win.webContents.openDevTools({ mode: 'detach' })
+  }
 
   return win
 }
 
+function showWindow() {
+
+ if (win?.isVisible()) {
+
+      win.hide()
+
+    } else {
+
+      win?.show()
+
+      win?.focus()
+
+
+
+      // Force clipboard check when window is shown
+
+      const currentContent = clipboard.readText()
+
+      if (currentContent && currentContent !== previousClipboardContent) {
+
+        previousClipboardContent = currentContent
+
+        win?.webContents.send('clipboard-updated', currentContent)
+
+      }
+
+    }
+}
+
 function stopClipboardMonitor() {
+  console.log('[Main] Stopping clipboard monitor')
   if (clipboardMonitorInterval) {
     clearInterval(clipboardMonitorInterval as NodeJS.Timeout)
     clipboardMonitorInterval = null
@@ -57,42 +94,42 @@ function stopClipboardMonitor() {
 }
 
 function startClipboardMonitor() {
+  console.log('[Main] Starting clipboard monitor')
   stopClipboardMonitor()
 
   clipboardMonitorInterval = setInterval(() => {
     try {
-      if (!win) return
+      if (!win || isUpdatingClipboard) {
+        return
+      }
 
       const currentContent = clipboard.readText()
 
       if (currentContent && currentContent !== previousClipboardContent) {
-        console.log('New clipboard content detected')
+        console.log('[Main] New clipboard content detected:', currentContent)
         previousClipboardContent = currentContent
 
-        // Ensure window is ready before sending
         if (win.webContents.isLoading()) {
-          console.log('Window still loading, waiting...')
+          console.log('[Main] Window still loading, waiting...')
           return
         }
 
         win.webContents.send('clipboard-updated', currentContent)
-        console.log('Sent clipboard update to renderer')
       }
     } catch (error) {
-      console.error('Error monitoring clipboard:', error)
+      console.error('[Main] Error monitoring clipboard:', error)
     }
-  }, 500) // Increased interval slightly for stability
+  }, 1000)
 }
 
 app.whenReady().then(() => {
+  console.log('[Main] App is ready')
   win = createWindow()
 
-  // Wait for window to be ready before starting monitor
   win.webContents.on('did-finish-load', () => {
-    console.log('Starting clipboard monitor')
+    console.log('[Main] Window finished loading, starting clipboard monitor')
     startClipboardMonitor()
 
-    // Force initial clipboard check
     const initialContent = clipboard.readText()
     if (initialContent) {
       win?.webContents.send('clipboard-updated', initialContent)
@@ -100,23 +137,12 @@ app.whenReady().then(() => {
   })
 
   globalShortcut.register('CommandOrControl+Alt+H', () => {
-    if (win?.isVisible()) {
-      win.hide()
-    } else {
-      win?.show()
-      win?.focus()
-
-      // Force clipboard check when window is shown
-      const currentContent = clipboard.readText()
-      if (currentContent && currentContent !== previousClipboardContent) {
-        previousClipboardContent = currentContent
-        win?.webContents.send('clipboard-updated', currentContent)
-      }
-    }
+    showWindow()
   })
 
   ipcMain.handle('paste-content', async (_event, content) => {
     try {
+      isUpdatingClipboard = true
       const activeWin = BrowserWindow.getFocusedWindow()
       clipboard.writeText(content)
       win?.hide()
@@ -124,15 +150,21 @@ app.whenReady().then(() => {
         activeWin.webContents.paste()
       }
     } catch (error) {
-      console.error('Error pasting content:', error)
+      console.error('[Main] Error pasting content:', error)
+    } finally {
+      isUpdatingClipboard = false
     }
   })
 
   ipcMain.handle('set-clipboard', (_event, content) => {
     try {
+      isUpdatingClipboard = true
       clipboard.writeText(content)
+      previousClipboardContent = content
     } catch (error) {
-      console.error('Error setting clipboard:', error)
+      console.error('[Main] Error setting clipboard:', error)
+    } finally {
+      isUpdatingClipboard = false
     }
   })
 })
